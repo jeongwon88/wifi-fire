@@ -1,6 +1,7 @@
 <!doctype html>
+<html lang="ko">
 <meta charset="utf-8" />
-<title>UNO R4 WiFi LED Remote</title>
+<title>UNO R4 WiFi Relay Remote</title>
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
 <style>
@@ -19,10 +20,13 @@
 
 <div class="wrap">
   <div class="card">
-    <h1>UNO R4 WiFi – LED 원격 제어</h1>
+    <h1>UNO R4 WiFi – 릴레이(Relay) 원격 제어</h1>
+
     <div class="line">브로커: <code id="broker"></code></div>
-    <div class="line">연결 상태: <span id="conn" class="bad">연결 안됨</span></div>
-    <div class="line">LED 상태: <b id="state">알 수 없음</b></div>
+    <div class="line">브라우저↔브로커: <span id="brokerConn" class="bad">연결 안됨</span></div>
+    <div class="line">장치(UNO) 상태: <span id="conn" class="bad">연결 안됨</span></div>
+
+    <div class="line">릴레이 상태: <b id="state">알 수 없음</b></div>
     <div class="btns">
       <button class="on"  onclick="send('ON')">켜기</button>
       <button class="off" onclick="send('OFF')">끄기</button>
@@ -34,23 +38,35 @@
 </div>
 
 <script>
-  // === 여기를 본인 값으로 ===
-  const HOST = "wss://ffcf6bab.ala.asia-southeast1.emqxsl.com:8084/mqtt";
-  const USER = "ljw8866";      // ← EMQX Authentication에서 만든 사용자
-  const PASS = "@011266Aab";        // ← 비밀번호
-  const PREFIX = "ledtest";            // ← 아두이노 코드와 100% 동일
+  // === 본인 값 입력 ===
+  const HOST   = "wss://ffcf6bab.ala.asia-southeast1.emqxsl.com:8084/mqtt";
+  const USER   = "ljw8866";
+  const PASS   = "@011266Aab";
+  const PREFIX = "ledtest";
 
-  // === 설정 끝 ===
   document.getElementById('broker').textContent = HOST;
-  document.getElementById('pref').textContent = PREFIX;
+  document.getElementById('pref').textContent   = PREFIX;
 
-  const topicCmd = `${PREFIX}/led/cmd`;
+  const topicCmd   = `${PREFIX}/led/cmd`;
   const topicState = `${PREFIX}/led/state`;
+  const topicHB    = `${PREFIX}/sys/hb`;       // ★ 하트비트(heartbeat) 토픽
 
-  const logEl = document.getElementById('log');
-  const connEl = document.getElementById('conn');
+  const logEl   = document.getElementById('log');
   const stateEl = document.getElementById('state');
+  const connEl  = document.getElementById('conn');        // 장치(UNO) 상태
+  const brkEl   = document.getElementById('brokerConn');  // 브라우저↔브로커 상태
+
   function log(...a){ logEl.textContent += a.join(' ')+"\n"; logEl.scrollTop = logEl.scrollHeight }
+  function setBrk(ok){ brkEl.textContent = ok?'연결됨':'연결 안됨'; brkEl.className = ok?'ok':'bad'; }
+  function setDev(ok){ connEl.textContent = ok?'연결됨':'연결 안됨'; connEl.className = ok?'ok':'bad'; }
+
+  // 하트비트 타임아웃(UNO 오프라인 판정)
+  const OFFLINE_AFTER_MS = 12000; // 12초 동안 하트비트 없으면 오프라인
+  let lastHb = 0;
+  setInterval(() => {
+    if (!lastHb) return;
+    if (Date.now() - lastHb > OFFLINE_AFTER_MS) setDev(false);
+  }, 1000);
 
   const client = mqtt.connect(HOST, {
     clientId: "web-"+Math.random().toString(16).slice(2),
@@ -58,20 +74,31 @@
   });
 
   client.on('connect', () => {
-    connEl.textContent = '연결됨'; connEl.className='ok';
+    setBrk(true);
     log('[connect] ok');
-    client.subscribe(topicState, (err)=> err?log('[sub err]',err):log('[sub]',topicState));
+    client.subscribe([topicState, topicHB], (err)=> err?log('[sub err]',err):log('[sub]', topicState, topicHB));
   });
 
   client.on('message', (t,p) => {
     const s = new TextDecoder().decode(p).trim();
     log('[msg]', t, '→', s);
-    if (t===topicState) stateEl.textContent = s;
+
+    if (t===topicState) {
+      stateEl.textContent = s;
+    } else if (t===topicHB) {
+      lastHb = Date.now();
+      setDev(true);  // 하트비트 받으면 장치 온라인
+    }
   });
-  client.on('reconnect', ()=>log('[reconnect]'));
-  client.on('error', e=>log('[error]', e?.message||e));
+
+  client.on('reconnect', ()=>{ log('[reconnect]'); setBrk(false); setDev(false); });
+  client.on('offline',   ()=>{ log('[offline]');   setBrk(false); setDev(false); });
+  client.on('close',     ()=>{ log('[close]');     setBrk(false); setDev(false); });
+  client.on('error',  e=>{ log('[error]', e?.message||e); setBrk(false); setDev(false); });
+
   function send(cmd){
-    client.publish(topicCmd, cmd);
+    client.publish(topicCmd, cmd/*, { qos:1 }*/);
     log('[pub]', topicCmd, '←', cmd);
   }
 </script>
+</html>
